@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import Toplevel, Canvas, Button, Text, font, Frame, Label, Checkbutton, IntVar
+from tkinter import Toplevel, Canvas, ttk
 from PIL import ImageGrab
 import pytesseract
 import requests
@@ -11,6 +11,12 @@ import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
+
+DEFAULT_FONT = ("Helvetica", 12)
+BG_COLOR = "#272727"
+FG_COLOR = "#DDDDDD"
+ACCENT_COLOR = "#0AB8A3"
+BUTTON_FG_COLOR = "#FFFFFF"
 
 def set_dpi_awareness():
     try:
@@ -27,7 +33,7 @@ def select_region(root):
     set_dpi_awareness()
     canvas = Canvas(root, cursor="cross", bg="black", highlightthickness=0)
     canvas.pack(fill=tk.BOTH, expand=True)
-    rect_id = canvas.create_rectangle(0, 0, 0, 0, outline="blue", width=2, dash=(2, 2))
+    rect_id = canvas.create_rectangle(0, 0, 0, 0, outline=ACCENT_COLOR, width=2, dash=(2, 2))
 
     region = [None, None, None, None]
     dragging = False
@@ -95,78 +101,121 @@ def save_settings(settings):
     with open("settings.json", "w") as f:
         json.dump(settings, f)
 
-def main_app():
-    main_root = tk.Tk()
-    main_root.title("Screen Text Translator")
-    app_font = font.Font(family="Helvetica", size=12)
+class ScreenTranslator(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Screen Text Translator")
+        self.configure(bg=BG_COLOR)
 
-    settings = load_settings()
-    regions = settings["regions"]
-    auto_translate_vars = [IntVar(value=int(x)) for x in settings.get("auto_translate", [False, False, False])]
-    interval_var = IntVar(value=max(settings.get("interval", 1), 1))  # 最小間隔 1秒
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TLabel", font=DEFAULT_FONT, background=BG_COLOR, foreground=FG_COLOR)
+        style.configure("TCheckbutton", font=DEFAULT_FONT, background=BG_COLOR, foreground=FG_COLOR)
+        style.configure("TButton", font=DEFAULT_FONT, padding=8, foreground=BUTTON_FG_COLOR, background=BG_COLOR)
+        style.map("TButton", foreground=[("active", ACCENT_COLOR)], background=[("active", BG_COLOR)])
+        style.configure("TFrame", background=BG_COLOR)
+        style.configure("TEntry", fieldbackground=BG_COLOR, foreground=FG_COLOR)
+        style.configure("Text", background=BG_COLOR, foreground=FG_COLOR)
 
-    result_frame = Frame(main_root, bg="white", padx=20, pady=20)
-    result_frame.pack(side=tk.LEFT, padx=20, pady=20, fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(self, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-    result_labels = []
-    result_texts = []
-    translated_text_boxes = []
+        result_frame = ttk.Frame(main_frame)
+        result_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-    for i in range(3):
-        frame = Frame(result_frame, bg="white", padx=10, pady=10, bd=1, relief=tk.SOLID)
-        frame.pack(pady=10, fill=tk.X)
+        self.settings = load_settings()
+        self.regions = self.settings["regions"]
+        self.auto_translate_vars = [tk.IntVar(value=int(x)) for x in self.settings.get("auto_translate", [False, False, False])]
+        self.interval_var = tk.IntVar(value=max(self.settings.get("interval", 1), 1))
 
-        label = Label(frame, text=f"選択範囲 {i+1}", font=app_font, bg="white")
-        label.pack(side=tk.LEFT)
+        self.result_labels = []
+        self.result_texts = []
+        self.translated_text_boxes = []
+        self.region_buttons = []
 
-        auto_translate_checkbox = Checkbutton(frame, text="自動翻訳", variable=auto_translate_vars[i], font=app_font, bg="white")
-        auto_translate_checkbox.pack(side=tk.LEFT)
+        for i in range(3):
+            frame = ttk.Frame(result_frame, padding=10, borderwidth=1, relief="solid")
+            frame.pack(pady=10, fill=tk.X)
 
-        result_text = Text(frame, height=3, width=40, font=app_font, wrap=tk.WORD)
-        result_text.pack(side=tk.LEFT, padx=10)
+            label = ttk.Label(frame, text=f"選択範囲 {i+1}", anchor="w")
+            label.pack(side=tk.LEFT, padx=5)
 
-        translated_text_box = Text(frame, height=3, width=40, font=app_font, wrap=tk.WORD)
-        translated_text_box.pack(side=tk.LEFT)
+            auto_translate_check = ttk.Checkbutton(frame, text="自動翻訳", variable=self.auto_translate_vars[i])
+            auto_translate_check.pack(side=tk.LEFT, padx=5)
 
-        result_labels.append(label)
-        result_texts.append(result_text)
-        translated_text_boxes.append(translated_text_box)
+            text_box = tk.Text(frame, height=3, width=30, font=DEFAULT_FONT, wrap=tk.WORD, borderwidth=0, highlightthickness=1, highlightcolor=ACCENT_COLOR, bg=BG_COLOR, fg=FG_COLOR)
+            text_box.pack(side=tk.LEFT, padx=5, fill=tk.BOTH, expand=True)
 
-    def register_region(index):
+            translated_text_box = tk.Text(frame, height=3, width=30, font=DEFAULT_FONT, wrap=tk.WORD, borderwidth=0, highlightthickness=1, highlightcolor=ACCENT_COLOR, state="disabled", bg=BG_COLOR, fg=FG_COLOR)
+            translated_text_box.pack(side=tk.LEFT, padx=5, fill=tk.BOTH, expand=True)
+
+            self.result_labels.append(label)
+            self.result_texts.append(text_box)
+            self.translated_text_boxes.append(translated_text_box)
+
+            button_frame = ttk.Frame(frame)
+            button_frame.pack(side=tk.LEFT, padx=5)
+
+            register_button = ttk.Button(button_frame, text="登録", command=lambda index=i: self.register_region(index))
+            register_button.pack(side=tk.TOP, pady=2)
+
+            translate_button = ttk.Button(button_frame, text="翻訳", command=lambda index=i: self.translate_region(index))
+            translate_button.pack(side=tk.BOTTOM, pady=2)
+
+            self.region_buttons.append((register_button, translate_button))
+
+        interval_frame = ttk.Frame(main_frame)
+        interval_frame.pack(pady=10, fill=tk.X)
+
+        interval_label = ttk.Label(interval_frame, text="自動翻訳の間隔 (秒):")
+        interval_label.pack(side=tk.LEFT)
+
+        interval_entry = ttk.Entry(interval_frame, textvariable=self.interval_var, width=5)
+        interval_entry.pack(side=tk.LEFT)
+
+        self.minsize(800, 600)
+        self.auto_translate_thread = threading.Thread(target=self.auto_translate_regions, daemon=True)
+        self.auto_translate_thread.start()
+
+    def register_region(self, index):
         selection_window = create_selection_window()
         selected_region = select_region(selection_window)
         selection_window.destroy()
 
         if all(selected_region):
-            regions[index] = selected_region
-            save_settings({"regions": regions, "auto_translate": [var.get() for var in auto_translate_vars], "interval": interval_var.get()})
+            self.regions[index] = selected_region
+            self.save_settings()
 
-    def translate_region(index):
-        region = regions[index]
+    def translate_region(self, index):
+        region = self.regions[index]
         if region:
             x1, y1, x2, y2 = region
             screenshot = ImageGrab.grab(bbox=(x1, y1, x2, y2))
             text = pytesseract.image_to_string(screenshot, lang='eng')
             translated_text = translate_text(text)
-            result_texts[index].delete('1.0', tk.END)
-            result_texts[index].insert('1.0', text)
-            translated_text_boxes[index].delete('1.0', tk.END)
-            translated_text_boxes[index].insert('1.0', translated_text)
+            self.result_texts[index].delete('1.0', tk.END)
+            self.result_texts[index].insert('1.0', text)
+            self.translated_text_boxes[index].configure(state="normal")
+            self.translated_text_boxes[index].delete('1.0', tk.END)
+            self.translated_text_boxes[index].insert('1.0', translated_text)
+            self.translated_text_boxes[index].configure(state="disabled")
 
-    def auto_translate_regions():
+    def auto_translate_regions(self):
         def update_texts(i, new_text, translated_text):
-            result_texts[i].delete('1.0', tk.END)
-            result_texts[i].insert('1.0', new_text)
-            translated_text_boxes[i].delete('1.0', tk.END)
-            translated_text_boxes[i].insert('1.0', translated_text)
-            print(f"選択範囲 {i + 1}: 自動翻訳完了 (間隔: {interval_var.get()}秒)")
+            self.result_texts[i].delete('1.0', tk.END)
+            self.result_texts[i].insert('1.0', new_text)
+            self.translated_text_boxes[i].configure(state="normal")
+            self.translated_text_boxes[i].delete('1.0', tk.END)
+            self.translated_text_boxes[i].insert('1.0', translated_text)
+            self.translated_text_boxes[i].configure(state="disabled")
+            print(f"選択範囲 {i + 1}: 自動翻訳完了 (間隔: {self.interval_var.get()}秒)")
 
         with ThreadPoolExecutor() as executor:
             last_texts = [""] * 3
             while True:
                 futures = []
-                for i, region in enumerate(regions):
-                    if auto_translate_vars[i].get() and region:
+                for i, region in enumerate(self.regions):
+                    if self.auto_translate_vars[i].get() and region:
                         x1, y1, x2, y2 = region
                         screenshot = ImageGrab.grab(bbox=(x1, y1, x2, y2))
                         new_text = pytesseract.image_to_string(screenshot, lang='eng').strip().replace("\n", " ")
@@ -178,36 +227,19 @@ def main_app():
 
                 for i, new_text, future in futures:
                     translated_text = future.result()
-                    main_root.after(0, update_texts, i, new_text, translated_text)
+                    self.after_idle(update_texts, i, new_text, translated_text)
 
-                time.sleep(max(interval_var.get(), 5))
+                time.sleep(max(self.interval_var.get(), 5))
 
-    control_frame = Frame(main_root, bg="white", padx=20, pady=20)
-    control_frame.pack(side=tk.RIGHT, padx=20, pady=20, fill=tk.Y)
-
-    for i in range(3):
-        button_frame = Frame(control_frame, bg="white")
-        button_frame.pack(pady=10, fill=tk.X)
-
-        register_button = Button(button_frame, text=f"選択範囲 {i+1} を登録", command=lambda index=i: register_region(index), font=app_font, bg="gray", fg="white")
-        register_button.pack(side=tk.LEFT, padx=5)
-
-        translate_button = Button(button_frame, text=f"選択範囲 {i+1} を翻訳", command=lambda index=i: translate_region(index), font=app_font, bg="gray", fg="white")
-        translate_button.pack(side=tk.LEFT)
-
-    interval_frame = Frame(control_frame, bg="white")
-    interval_frame.pack(pady=10, fill=tk.X)
-
-    interval_label = Label(interval_frame, text="自動翻訳の間隔 (秒):", font=app_font, bg="white")
-    interval_label.pack(side=tk.LEFT)
-
-    interval_entry = tk.Entry(interval_frame, textvariable=interval_var, font=app_font, width=5)
-    interval_entry.pack(side=tk.LEFT)
-
-    auto_translate_thread = threading.Thread(target=auto_translate_regions, daemon=True)
-    auto_translate_thread.start()
-
-    main_root.mainloop()
+    def save_settings(self):
+        settings = {
+            "regions": self.regions,
+            "auto_translate": [var.get() for var in self.auto_translate_vars],
+            "interval": self.interval_var.get()
+        }
+        with open("settings.json", "w") as f:
+            json.dump(settings, f)
 
 if __name__ == "__main__":
-    main_app()
+    app = ScreenTranslator()
+    app.mainloop()
