@@ -1,0 +1,2 @@
+# API KEY config
+DEEPL_API_KEY = 'YOUR API KEY'
