@@ -174,8 +174,8 @@ class ScreenTranslator(tk.Tk):
         interval_entry.pack(side=tk.LEFT)
 
         self.minsize(800, 600)
-        self.auto_translate_thread = threading.Thread(target=self.auto_translate_regions, daemon=True)
-        self.auto_translate_thread.start()
+        self.auto_translate_thread = None
+        self.after(100, self.start_auto_translate)
 
     def register_region(self, index):
         selection_window = create_selection_window()
@@ -199,6 +199,12 @@ class ScreenTranslator(tk.Tk):
             self.translated_text_boxes[index].delete('1.0', tk.END)
             self.translated_text_boxes[index].insert('1.0', translated_text)
             self.translated_text_boxes[index].configure(state="disabled")
+
+    def start_auto_translate(self):
+        if self.auto_translate_thread is None or not self.auto_translate_thread.is_alive():
+            self.auto_translate_thread = threading.Thread(target=self.auto_translate_regions, daemon=True)
+            self.auto_translate_thread.start()
+        self.after(100, self.start_auto_translate)
 
     def auto_translate_regions(self):
         def update_texts(i, new_text, translated_text):
@@ -224,6 +230,8 @@ class ScreenTranslator(tk.Tk):
                             future = executor.submit(translate_text, new_text)
                             futures.append((i, new_text, future))
                             last_texts[i] = new_text
+                    else:
+                        last_texts[i] = ""
 
                 for i, new_text, future in futures:
                     translated_text = future.result()
