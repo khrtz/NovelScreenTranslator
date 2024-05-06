@@ -1,5 +1,6 @@
 import os
 import sys
+
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(project_root)
 import tkinter as tk
@@ -19,29 +20,10 @@ from services.translation_service import translate_text
 from RichTextArea import RichTextArea
 from selection_window import SelectionWindow
 from services.pytesseract_ocr_service import PytesseractOCRService
+from views.clay_button import ClayButton
+from config import TEXT_FG_COLOR, BUTTON_BG_COLOR, BUTTON_ACTIVE_BG_COLOR, BUTTON_FG_COLOR, FG_COLOR, ACCENT_COLOR, BG_COLOR, TEXT_BG_COLOR, ENTRY_BG_COLOR
+from controllers.settings_controller import SettingsController
 
-
-BG_COLOR = "#E0E5EC"
-FG_COLOR = "#000000"
-ACCENT_COLOR = "#007ACC"
-BUTTON_BG_COLOR = "#C9D1D9"
-BUTTON_FG_COLOR = "#000000"
-BUTTON_ACTIVE_BG_COLOR = "#A7B0B8"
-ENTRY_BG_COLOR = "#FFFFFF"
-TEXT_BG_COLOR = "#FFFFFF"
-TEXT_FG_COLOR = "#000000"
-SHADOW_COLOR = "#D1D9E6"
-
-def load_settings():
-    if os.path.exists("settings.json"):
-        with open("settings.json", "r") as f:
-            return json.load(f)
-    else:
-        return {"regions": [None, None, None], "auto_translate": [False, False, False], "interval": 1}
-
-def save_settings(settings):
-    with open("settings.json", "w") as f:
-        json.dump(settings, f)
 
 def create_round_rectangle(canvas, x1, y1, x2, y2, radius=25, **kwargs):
     points = [x1 + radius, y1,
@@ -67,23 +49,6 @@ def create_round_rectangle(canvas, x1, y1, x2, y2, radius=25, **kwargs):
 
     return canvas.create_polygon(points, **kwargs, smooth=True)
 
-class ClayButton(ttk.Button):
-    def __init__(self, master=None, **kwargs):
-        super().__init__(master, **kwargs)
-        self.configure(style="Clay.TButton")
-
-        style = ttk.Style()
-        style.configure("Clay.TButton",
-                        background=BUTTON_BG_COLOR,
-                        foreground=BUTTON_FG_COLOR,
-                        borderwidth=0,
-                        focusthickness=0,
-                        font=("Segoe UI", 12),
-                        padding=10)
-        style.map("Clay.TButton",
-                  background=[("active", BUTTON_ACTIVE_BG_COLOR)],
-                  foreground=[("active", BUTTON_FG_COLOR)])
-
 class ScreenTranslator(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -108,11 +73,11 @@ class ScreenTranslator(tk.Tk):
         result_frame = ttk.Frame(main_frame)
         result_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        self.settings = load_settings()
-        self.regions = self.settings["regions"]
-        self.auto_translate_vars = [tk.IntVar(value=int(x)) for x in self.settings.get("auto_translate", [False, False, False])]
-        self.interval_var = tk.IntVar(value=max(self.settings.get("interval", 1), 1))
-
+        self.settings_controller = SettingsController()
+        self.settings = self.settings_controller.load_settings()
+        self.regions = self.settings.regions
+        self.auto_translate_vars = [tk.IntVar(value=int(x)) for x in self.settings.auto_translate]
+        self.interval_var = tk.IntVar(value=max(self.settings.interval, 1))
         self.result_labels = []
         self.result_texts = []
         self.translated_text_boxes = []
@@ -241,8 +206,8 @@ class ScreenTranslator(tk.Tk):
         selected_region = selection_window.get_selected_region()
 
         if all(selected_region):
-            self.regions[index] = selected_region
-            self.save_settings()
+            self.settings.regions[index] = selected_region
+            self.settings_controller.save_settings(self.settings)
 
     def get_context(self, index, text):
         context_before = ""
@@ -256,14 +221,6 @@ class ScreenTranslator(tk.Tk):
 
         return context_before, context_after
 
-    def save_settings(self):
-        settings = {
-            "regions": self.regions,
-            "auto_translate": [var.get() for var in self.auto_translate_vars],
-            "interval": self.interval_var.get()
-        }
-        with open("settings.json", "w") as f:
-            json.dump(settings, f)
 
     def update_texts(self, i, new_text, translated_text):
         self.result_texts[i].delete('1.0', tk.END)

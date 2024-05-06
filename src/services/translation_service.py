@@ -11,7 +11,7 @@ def translate_text(text, target_lang="JA", context_before="", context_after=""):
 
     text = re.sub(r'@|®|©|¥|™', emojize(":two_hearts:", language="alias", variant="emoji_type"), text)
 
-    url = "https://api-free.deepl.com/v2/translate"
+    url = "https://api.deepl.com/v2/translate"
     params = {
         "auth_key": config.DEEPL_API_KEY,
         "text": context_before + text + context_after,
