@@ -1,18 +1,25 @@
+import os
+import sys
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(project_root)
 import tkinter as tk
-from tkinter import Toplevel, Canvas, ttk
-from PIL import ImageGrab, ImageTk, Image
+from tkinter import ttk
+from PIL import ImageGrab
 import pytesseract
 import requests
-import ctypes
-from ctypes import wintypes, windll
 import config
 import json
 import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from tkinter import Toplevel, Canvas
 
+from services.translation_service import translate_text
 from RichTextArea import RichTextArea
+from selection_window import SelectionWindow
+from services.pytesseract_ocr_service import PytesseractOCRService
+
 
 BG_COLOR = "#E0E5EC"
 FG_COLOR = "#000000"
@@ -24,80 +31,6 @@ ENTRY_BG_COLOR = "#FFFFFF"
 TEXT_BG_COLOR = "#FFFFFF"
 TEXT_FG_COLOR = "#000000"
 SHADOW_COLOR = "#D1D9E6"
-
-def set_dpi_awareness():
-    try:
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-    except AttributeError:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-
-def get_cursor_position():
-    point = wintypes.POINT()
-    ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
-    return point.x, point.y
-
-def select_region(root):
-    set_dpi_awareness()
-    canvas = Canvas(root, cursor="cross", bg="black", highlightthickness=0)
-    canvas.pack(fill=tk.BOTH, expand=True)
-    rect_id = canvas.create_rectangle(0, 0, 0, 0, outline=ACCENT_COLOR, width=2, dash=(4, 4))
-
-    region = [None, None, None, None]
-    dragging = False
-
-    def on_mouse_down(event):
-        nonlocal dragging
-        region[:2] = get_cursor_position()
-        region[2:] = region[:2]
-        dragging = True
-
-    def on_mouse_move(event):
-        if dragging:
-            region[2:] = get_cursor_position()
-            canvas.coords(rect_id, *region)
-
-    def on_mouse_up(event):
-        nonlocal dragging
-        if dragging:
-            dragging = False
-            region[2:] = get_cursor_position()
-            root.quit()
-
-    canvas.bind("<ButtonPress-1>", on_mouse_down)
-    canvas.bind("<B1-Motion>", on_mouse_move)
-    canvas.bind("<ButtonRelease-1>", on_mouse_up)
-
-    root.mainloop()
-    return region
-
-def translate_text(text, target_lang="JA", context_before="", context_after=""):
-    if not text.strip():
-        return text
-
-    url = "https://api-free.deepl.com/v2/translate"
-    params = {
-        "auth_key": config.DEEPL_API_KEY,
-        "text": context_before + text + context_after,
-        "target_lang": target_lang,
-        "split_sentences": "1",
-        "formality": "prefer_more"
-    }
-    response = requests.post(url, data=params)
-    if response.status_code == 200:
-        translations = response.json()['translations']
-        translated_sentences = [t['text'] for t in translations]
-        return "".join(translated_sentences)
-    else:
-        print("Failed to translate:", response.text)
-        return "Translation failed."
-
-def create_selection_window():
-    root = Toplevel()
-    root.attributes('-alpha', 0.3)
-    root.attributes('-fullscreen', True)
-    root.wait_visibility(root)
-    root.wm_attributes('-topmost', 1)
-    return root
 
 def load_settings():
     if os.path.exists("settings.json"):
@@ -238,6 +171,37 @@ class ScreenTranslator(tk.Tk):
         self.auto_translate_thread = None
         self.after(100, self.start_auto_translate)
 
+    def auto_translate_regions(self):
+        last_texts = [""] * 3
+        while True:
+            with ThreadPoolExecutor() as executor:
+                futures = []
+                for i, region in enumerate(self.regions):
+                    if self.auto_translate_vars[i].get() and region:
+                        ocr_service = PytesseractOCRService()
+                        new_text, success = ocr_service.get_text_from_region(region)
+
+                        if success and new_text != last_texts[i]:
+                            context_before, context_after = self.get_context(i, new_text)
+                            future = executor.submit(translate_text, new_text, context_before=context_before,
+                                                     context_after=context_after)
+                            futures.append((i, new_text, future))
+                            last_texts[i] = new_text
+
+                for i, new_text, future in futures:
+                    translated_text = future.result()
+                    self.after_idle(self.update_texts, i, new_text, translated_text)
+                    self.highlight_region(self.regions[i], translated_text)
+
+            time.sleep(max(self.interval_var.get(), 5))
+
+
+    def start_auto_translate(self):
+        if self.auto_translate_thread is None or not self.auto_translate_thread.is_alive():
+            self.auto_translate_thread = threading.Thread(target=self.auto_translate_regions, daemon=True)
+            self.auto_translate_thread.start()
+        self.after(100, self.start_auto_translate)
+
     def highlight_selected_region(self, index):
         region = self.regions[index]
         if region:
@@ -273,9 +237,8 @@ class ScreenTranslator(tk.Tk):
         self.rich_text_area.animate_text(translated_text)
 
     def register_region(self, index):
-        selection_window = create_selection_window()
-        selected_region = select_region(selection_window)
-        selection_window.destroy()
+        selection_window = SelectionWindow(self)
+        selected_region = selection_window.get_selected_region()
 
         if all(selected_region):
             self.regions[index] = selected_region
@@ -293,28 +256,14 @@ class ScreenTranslator(tk.Tk):
 
         return context_before, context_after
 
-    def translate_region(self, index):
-        region = self.regions[index]
-        if region:
-            x1, y1, x2, y2 = region
-            screenshot = ImageGrab.grab(bbox=(x1, y1, x2, y2))
-            text = pytesseract.image_to_string(screenshot, lang='eng')
-            context_before, context_after = self.get_context(index, text)
-            translated_text = translate_text(text, context_before=context_before, context_after=context_after)
-            self.result_texts[index].delete('1.0', tk.END)
-            self.result_texts[index].insert('1.0', text)
-            self.translated_text_boxes[index].configure(state="normal")
-            self.translated_text_boxes[index].delete('1.0', tk.END)
-            self.translated_text_boxes[index].insert('1.0', translated_text)
-            self.translated_text_boxes[index].configure(state="disabled")
-
-            self.highlight_region(region, translated_text)
-
-    def start_auto_translate(self):
-        if self.auto_translate_thread is None or not self.auto_translate_thread.is_alive():
-            self.auto_translate_thread = threading.Thread(target=self.auto_translate_regions, daemon=True)
-            self.auto_translate_thread.start()
-        self.after(100, self.start_auto_translate)
+    def save_settings(self):
+        settings = {
+            "regions": self.regions,
+            "auto_translate": [var.get() for var in self.auto_translate_vars],
+            "interval": self.interval_var.get()
+        }
+        with open("settings.json", "w") as f:
+            json.dump(settings, f)
 
     def update_texts(self, i, new_text, translated_text):
         self.result_texts[i].delete('1.0', tk.END)
@@ -325,43 +274,69 @@ class ScreenTranslator(tk.Tk):
         self.translated_text_boxes[i].configure(state="disabled")
         print(f"選択範囲 {i + 1}: 自動翻訳完了 (間隔: {self.interval_var.get()}秒)")
 
-    def auto_translate_regions(self):
-        last_texts = [""] * 3
-        while True:
-            with ThreadPoolExecutor() as executor:
-                futures = []
-                for i, region in enumerate(self.regions):
-                    if self.auto_translate_vars[i].get() and region:
-                        x1, y1, x2, y2 = region
-                        screenshot = ImageGrab.grab(bbox=(x1, y1, x2, y2))
-                        new_text = pytesseract.image_to_string(screenshot, lang='eng').strip().replace("\n", " ")
+    def translate_region(self, index):
+        region = self.regions[index]
+        if region:
+            ocr_service = PytesseractOCRService()
+            text, success = ocr_service.get_text_from_region(region)
+            if success:
+                context_before, context_after = self.get_context(index, text)
+                translated_text = translate_text(text, context_before=context_before, context_after=context_after)
+                self.result_texts[index].delete('1.0', tk.END)
+                self.result_texts[index].insert('1.0', text)
+                self.translated_text_boxes[index].configure(state="normal")
+                self.translated_text_boxes[index].delete('1.0', tk.END)
+                self.translated_text_boxes[index].insert('1.0', translated_text)
+                self.translated_text_boxes[index].configure(state="disabled")
 
-                        if new_text and new_text != last_texts[i]:
-                            context_before, context_after = self.get_context(i, new_text)
-                            future = executor.submit(translate_text, new_text, context_before=context_before,
-                                                     context_after=context_after)
-                            futures.append((i, new_text, future))
-                            last_texts[i] = new_text
-                        elif not new_text:
-                            pass
-                        else:
-                            pass
+                self.highlight_region(region, translated_text)
 
-                for i, new_text, future in futures:
-                    translated_text = future.result()
-                    self.after_idle(self.update_texts, i, new_text, translated_text)
-                    self.highlight_region(self.regions[i], translated_text)
+            def start_auto_translate(self):
+                if self.auto_translate_thread is None or not self.auto_translate_thread.is_alive():
+                    self.auto_translate_thread = threading.Thread(target=self.auto_translate_regions, daemon=True)
+                    self.auto_translate_thread.start()
+                self.after(100, self.start_auto_translate)
 
-            time.sleep(max(self.interval_var.get(), 5))
+            def update_texts(self, i, new_text, translated_text):
+                self.result_texts[i].delete('1.0', tk.END)
+                self.result_texts[i].insert('1.0', new_text)
+                self.translated_text_boxes[i].configure(state="normal")
+                self.translated_text_boxes[i].delete('1.0', tk.END)
+                self.translated_text_boxes[i].insert('1.0', translated_text)
+                self.translated_text_boxes[i].configure(state="disabled")
+                print(f"選択範囲 {i + 1}: 自動翻訳完了 (間隔: {self.interval_var.get()}秒)")
 
-    def save_settings(self):
-        settings = {
-            "regions": self.regions,
-            "auto_translate": [var.get() for var in self.auto_translate_vars],
-            "interval": self.interval_var.get()
-        }
-        with open("settings.json", "w") as f:
-            json.dump(settings, f)
+            def auto_translate_regions(self):
+                last_texts = [""] * 3
+                while True:
+                    with ThreadPoolExecutor() as executor:
+                        futures = []
+                        for i, region in enumerate(self.regions):
+                            if self.auto_translate_vars[i].get() and region:
+                                x1, y1, x2, y2 = region
+                                screenshot = ImageGrab.grab(bbox=(x1, y1, x2, y2))
+                                custom_config = r'--oem 3 --psm 6 -l eng'
+
+                                new_text = pytesseract.image_to_string(screenshot,
+                                                                       config=custom_config).strip().replace("\n", " ")
+
+                                if new_text and new_text != last_texts[i]:
+                                    context_before, context_after = self.get_context(i, new_text)
+                                    future = executor.submit(translate_text, new_text, context_before=context_before,
+                                                             context_after=context_after)
+                                    futures.append((i, new_text, future))
+                                    last_texts[i] = new_text
+                                elif not new_text:
+                                    pass
+                                else:
+                                    pass
+
+                        for i, new_text, future in futures:
+                            translated_text = future.result()
+                            self.after_idle(self.update_texts, i, new_text, translated_text)
+                            self.highlight_region(self.regions[i], translated_text)
+
+                    time.sleep(max(self.interval_var.get(), 5))
 
 if __name__ == "__main__":
     app = ScreenTranslator()
