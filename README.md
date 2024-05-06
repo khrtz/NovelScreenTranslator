@@ -1,3 +1,3 @@
 ## ScreenTranslate
 
-![スクリーンショット 2024-05-06 021545](https://github.com/khrtz/screen-translate/assets/3260407/ad31a5a5-7608-4583-80e8-cc3614b66c09)
+![スクリーンショット 2024-05-06 213522](https://github.com/khrtz/NovelScreenTranslator/assets/3260407/a7eadad7-d1e5-42c6-a3e8-9170196da903)
